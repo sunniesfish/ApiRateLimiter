@@ -35,9 +35,9 @@ class ApiRateLimiter<T> {
     ) {
       throw new InvalidOptionsError();
     }
-    this.maxPerSecond = options.maxPerSecond;
-    this.maxPerMinute = options.maxPerMinute;
-    this.maxQueueSize = options.maxQueueSize;
+    this.maxPerSecond = options.maxPerSecond ?? 3;
+    this.maxPerMinute = options.maxPerMinute ?? 100;
+    this.maxQueueSize = options.maxQueueSize ?? 1000;
     this.processInterval = options.processInterval ?? 1000;
   }
 
@@ -46,6 +46,8 @@ class ApiRateLimiter<T> {
    * @throws {QueueFullError} When queue reaches maximum capacity
    */
   public addRequest(request: ApiRequest<T>): Promise<T> {
+    console.log("queue length is " + this.queue.length);
+    console.log("adding request");
     if (this.queue.length >= this.maxQueueSize) {
       return Promise.reject(new QueueFullError());
     }
@@ -74,26 +76,26 @@ class ApiRateLimiter<T> {
   /**
    * Processes queued requests while respecting configured rate limits
    */
-  private async processQueueHelper(now: number): Promise<number> {
+  private async processQueueHelper(now: number) {
     this.updateRequestHistory(now);
     const availableRequests = this.calculateAvailableRequests();
-    let processedCount = 0;
 
     for (let i = 0; i < availableRequests && this.queue.length > 0; i++) {
+      console.log("resolving", i + 1);
       const [request, resolve, reject] = this.queue.shift()!;
       await this.processRequest(request, resolve, reject, now);
-      processedCount++;
     }
-    return processedCount;
   }
 
   private async processQueue() {
+    console.log("process Queue called ===========");
     if (this.isProcessing) return;
     this.isProcessing = true;
-
     try {
       const now = Date.now();
       await this.processQueueHelper(now);
+    } catch (error) {
+      this.errorHandler(error);
     } finally {
       this.isProcessing = false;
       if (this.queue.isEmpty()) this.stopTimer();
@@ -113,9 +115,9 @@ class ApiRateLimiter<T> {
     reject: (reason: any) => void,
     now: number
   ) {
-    this.lastSecondRequests.push(now);
-    this.lastMinuteRequests.push(now);
     try {
+      this.lastSecondRequests.push(now);
+      this.lastMinuteRequests.push(now);
       const result = await request();
       resolve(result);
     } catch (error) {
@@ -174,6 +176,7 @@ class ApiRateLimiter<T> {
    * Timer controls the rate at which queued requests are processed.
    */
   private startTimer() {
+    console.log("starting");
     if (!this.timer) {
       this.timer = setInterval(
         this.processQueue.bind(this),
@@ -187,6 +190,7 @@ class ApiRateLimiter<T> {
    * or active request history to manage.
    */
   private stopTimer() {
+    console.log("stoping");
     if (
       this.timer &&
       this.queue.isEmpty() &&

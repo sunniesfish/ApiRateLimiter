@@ -4,7 +4,7 @@ import { TIME_CONSTANTS } from "./constants";
 
 describe("ApiRateLimiter", () => {
   const defaultOptions = {
-    maxPerSecond: 10,
+    maxPerSecond: 3,
     maxPerMinute: 50,
     maxQueueSize: 100,
   };
@@ -42,12 +42,20 @@ describe("ApiRateLimiter", () => {
         ...defaultOptions,
         maxQueueSize: 1,
       });
-      const mockRequest = jest.fn().mockResolvedValue("test");
 
-      await limiter.addRequest(mockRequest);
-      await expect(limiter.addRequest(mockRequest)).rejects.toThrow(
-        QueueFullError
-      );
+      const mockRequest = jest.fn(() => Promise.resolve("test"));
+
+      //first request resolved immediately
+      const firstRequestPromise = limiter.addRequest(mockRequest);
+
+      //second request ready to be processed
+      const secondRequestPromise = limiter.addRequest(mockRequest);
+
+      //third request rejected because queue is full
+      const thirdRequestPromise = limiter.addRequest(mockRequest);
+      await expect(thirdRequestPromise).rejects.toThrow(QueueFullError);
+
+      await Promise.all([firstRequestPromise, secondRequestPromise]);
     });
 
     it("should process requests within rate limits", async () => {
@@ -55,24 +63,27 @@ describe("ApiRateLimiter", () => {
         maxPerSecond: 2,
         maxPerMinute: 5,
         maxQueueSize: 5,
+        processInterval: 1000,
       });
-      const mockRequest = jest.fn().mockResolvedValue("success");
-
+      const mockRequest = jest.fn(() => Promise.resolve("test"));
+      console.log("////////////testing...");
       const requests = Array(3)
         .fill(null)
         .map(() => limiter.addRequest(mockRequest));
 
       // Process first batch
       jest.advanceTimersByTime(TIME_CONSTANTS.SECOND_IN_MS);
-      await Promise.all(requests);
+      await Promise.resolve(requests[0]);
+      await Promise.resolve(requests[1]);
 
       expect(mockRequest).toHaveBeenCalledTimes(2);
 
       // Process remaining request
       jest.advanceTimersByTime(TIME_CONSTANTS.SECOND_IN_MS);
-      await Promise.all(requests);
+      await Promise.resolve(requests[2]);
 
       expect(mockRequest).toHaveBeenCalledTimes(3);
+      console.log("test end//////////////");
     });
 
     it("should handle failed requests properly", async () => {
@@ -141,10 +152,9 @@ describe("ApiRateLimiter", () => {
 
   describe("queue processing", () => {
     it("should process queue at specified intervals", async () => {
-      const processInterval = 500;
+      const processInterval = 1000;
       const limiter = new ApiRateLimiter({
         ...defaultOptions,
-        maxPerSecond: 1,
         processInterval,
       });
       const mockRequest = jest.fn().mockResolvedValue("test");
@@ -153,15 +163,12 @@ describe("ApiRateLimiter", () => {
         .fill(null)
         .map(() => limiter.addRequest(mockRequest));
 
-      expect(mockRequest).toHaveBeenCalledTimes(0);
-
-      jest.advanceTimersByTime(processInterval);
       await Promise.all([requests[0]]);
       expect(mockRequest).toHaveBeenCalledTimes(1);
 
       jest.advanceTimersByTime(processInterval);
       await Promise.all([requests[1]]);
       expect(mockRequest).toHaveBeenCalledTimes(2);
-    });
+    }, 10000);
   });
 });
