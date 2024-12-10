@@ -1,27 +1,22 @@
 import Deque from "double-ended-queue";
+import { TIME_CONSTANTS } from "./constants";
+import { InvalidOptionsError, QueueFullError } from "./errors";
 import {
   ApiRateLimiterOptions,
   ApiRequest,
   QueueItem,
   RateLimiterStatus,
 } from "./type";
-import { TIME_CONSTANTS } from "./constants";
-import { InvalidOptionsError, QueueFullError } from "./errors";
 
-/**
- * Manages API request rate limiting with configurable time windows
- * @template T The type of API response
- */
 class ApiRateLimiter<T> {
-  private isProcessing: boolean = false;
   private timer: NodeJS.Timeout | null = null;
-  private lastSecondRequests: Deque<number> = new Deque<number>();
-  private lastMinuteRequests: Deque<number> = new Deque<number>();
   private queue: Deque<QueueItem<T>> = new Deque<QueueItem<T>>();
+  private mpsCounter: number;
+  private mpmCounter: number;
+  private activeRequests: number = 0;
   private maxPerSecond: number;
   private maxPerMinute: number;
   private maxQueueSize: number;
-  private processInterval: number;
   private static readonly Constants = TIME_CONSTANTS;
 
   constructor(
@@ -35,169 +30,88 @@ class ApiRateLimiter<T> {
     ) {
       throw new InvalidOptionsError();
     }
-    this.maxPerSecond = options.maxPerSecond ?? 3;
-    this.maxPerMinute = options.maxPerMinute ?? 100;
-    this.maxQueueSize = options.maxQueueSize ?? 1000;
-    this.processInterval = options.processInterval ?? 1000;
+    this.mpsCounter = options.maxPerSecond ?? 100;
+    this.mpmCounter = options.maxPerMinute ?? 1000;
+    this.maxPerSecond = options.maxPerSecond ?? 100;
+    this.maxPerMinute = options.maxPerMinute ?? 1000;
+    this.maxQueueSize = options.maxQueueSize ?? 10000;
   }
 
-  /**
-   * Adds a new API request to the rate limiter queue
-   * @throws {QueueFullError} When queue reaches maximum capacity
-   */
   public addRequest(request: ApiRequest<T>): Promise<T> {
-    console.log("queue length is " + this.queue.length);
-    console.log("adding request");
     if (this.queue.length >= this.maxQueueSize) {
       return Promise.reject(new QueueFullError());
     }
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<T>((resolve, reject) =>
+      this.manageRequest(request, resolve, reject)
+    );
+  }
+
+  private async manageRequest(
+    request: ApiRequest<T>,
+    resolve: (value: T | PromiseLike<T>) => void,
+    reject: (reason?: any) => void
+  ) {
+    if (!this.timer) {
+      this.timer = setInterval(
+        () => this.processQueue(),
+        ApiRateLimiter.Constants.SECOND_IN_MS
+      );
+    }
+
+    if (this.calculateAvailableRequests() > 0) {
+      this.processRequest(request, resolve, reject);
+    } else {
       this.queue.push([request, resolve, reject]);
-      if (!this.timer) {
-        this.startTimer();
-        this.processQueue();
-      }
-    });
-  }
-
-  /**
-   * Returns current rate limiter status including queue size and request counts
-   */
-  public getStatus(): RateLimiterStatus {
-    const now = Date.now();
-    this.updateRequestHistory(now);
-    return {
-      queueSize: this.queue.length,
-      requestsLastSecond: this.lastSecondRequests.length,
-      requestsLastMinute: this.lastMinuteRequests.length,
-    };
-  }
-
-  /**
-   * Processes queued requests while respecting configured rate limits
-   */
-  private async processQueueHelper(now: number) {
-    this.updateRequestHistory(now);
-    const availableRequests = this.calculateAvailableRequests();
-    const queuelength = this.queue.length;
-    for (let i = 0; i < availableRequests && queuelength > 0; i++) {
-      console.log("resolving", i + 1);
-      const [request, resolve, reject] = this.queue.shift()!;
-      await this.processRequest(request, resolve, reject, now);
     }
   }
 
   private async processQueue() {
-    console.log("process Queue called ===========");
-    if (this.isProcessing) return;
-    this.isProcessing = true;
-    try {
-      const now = Date.now();
-      await this.processQueueHelper(now);
-    } catch (error) {
-      this.errorHandler(error);
-    } finally {
-      this.isProcessing = false;
-      console.log("after process finally length is", this.queue.length);
-      if (this.queue.isEmpty()) this.stopTimer();
+    for (let i = 0; i < this.maxPerSecond && this.queue.length > 0; i++) {
+      const [request, resolve, reject] = this.queue.shift()!;
+      this.processRequest(request, resolve, reject);
+    }
+
+    this.mpsCounter = Math.min(this.mpsCounter + 1, this.maxPerSecond);
+    this.mpmCounter = Math.min(
+      this.mpmCounter + this.maxPerMinute / 60,
+      this.maxPerMinute
+    );
+
+    if (this.queue.isEmpty() && this.activeRequests === 0) {
+      this.stopTimer();
     }
   }
 
-  /**
-   * Processes a single request and updates request history.
-   * @param request - The API request to execute
-   * @param resolve - Promise resolve function
-   * @param reject - Promise reject function
-   * @param now - Current timestamp
-   */
+  public getStatus(): RateLimiterStatus {
+    return {
+      queueSize: this.queue.length,
+      availableRequests: this.calculateAvailableRequests(),
+    };
+  }
+
   private async processRequest(
     request: ApiRequest<T>,
     resolve: (value: T) => void,
-    reject: (reason: any) => void,
-    now: number
+    reject: (reason: any) => void
   ) {
+    this.activeRequests++;
     try {
-      this.lastSecondRequests.push(now);
-      this.lastMinuteRequests.push(now);
       const result = await request();
       resolve(result);
     } catch (error) {
       this.errorHandler(error);
       reject(error);
+    } finally {
+      this.activeRequests--;
     }
   }
 
-  /**
-   * Calculates available request capacity based on current rate limits.
-   * @returns Number of requests that can be processed
-   */
   private calculateAvailableRequests(): number {
-    const availableInSecond =
-      this.maxPerSecond - this.lastSecondRequests.length;
-    const availableInMinute =
-      this.maxPerMinute - this.lastMinuteRequests.length;
-    return Math.min(availableInSecond, availableInMinute);
+    return Math.min(this.mpsCounter, this.mpmCounter);
   }
 
-  /**
-   * Updates request history by removing expired requests from all time windows.
-   * @param now - Current timestamp
-   */
-  private updateRequestHistory(now: number): void {
-    this.removeExpiredRequests(
-      this.lastSecondRequests,
-      now,
-      ApiRateLimiter.Constants.SECOND_IN_MS
-    );
-    this.removeExpiredRequests(
-      this.lastMinuteRequests,
-      now,
-      ApiRateLimiter.Constants.MINUTE_IN_MS
-    );
-  }
-
-  /**
-   * Removes expired requests from the specified time window queue
-   */
-  private removeExpiredRequests(
-    queue: Deque<number>,
-    now: number,
-    timeWindow: number
-  ): void {
-    while (
-      queue.peekFront() !== undefined &&
-      now - queue.peekFront()! >= timeWindow
-    ) {
-      queue.shift();
-    }
-  }
-
-  /**
-   * Starts the queue processing timer if not already running.
-   * Timer controls the rate at which queued requests are processed.
-   */
-  private startTimer() {
-    console.log("starting");
-    if (!this.timer) {
-      this.timer = setInterval(
-        this.processQueue.bind(this),
-        this.processInterval
-      );
-    }
-  }
-
-  /**
-   * Stops the processing timer if there are no pending requests
-   * or active request history to manage.
-   */
   private stopTimer() {
-    console.log("stoping");
-    if (
-      this.timer &&
-      this.queue.isEmpty() &&
-      this.lastSecondRequests.isEmpty() &&
-      this.lastMinuteRequests.isEmpty()
-    ) {
+    if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }

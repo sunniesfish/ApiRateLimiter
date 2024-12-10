@@ -17,8 +17,7 @@ export interface ApiRateLimiterOptions {
 /** Current status of the rate limiter */
 export interface RateLimiterStatus {
   queueSize: number;
-  requestsLastSecond: number;
-  requestsLastMinute: number;
+  availableRequests: number;
 }
 
 export type ResolveFunction<T> = (value: T | PromiseLike<T>) => void;
