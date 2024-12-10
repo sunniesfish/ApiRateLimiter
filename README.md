@@ -1,7 +1,6 @@
-# API Rate Limiter
-
 # FIXING!!
 
+# API Rate Limiter
 
 A TypeScript library for rate limiting and queuing API requests.
 

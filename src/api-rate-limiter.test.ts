@@ -59,31 +59,35 @@ describe("ApiRateLimiter", () => {
     });
 
     it("should process requests within rate limits", async () => {
+      console.log("=====start test");
       const limiter = new ApiRateLimiter({
         maxPerSecond: 2,
         maxPerMinute: 5,
-        maxQueueSize: 5,
-        processInterval: 1000,
+        maxQueueSize: 10,
+        processInterval: 1000, // 1초 간격으로 큐를 처리
       });
-      const mockRequest = jest.fn(() => Promise.resolve("test"));
-      console.log("////////////testing...");
-      const requests = Array(3)
-        .fill(null)
-        .map(() => limiter.addRequest(mockRequest));
 
-      // Process first batch
-      jest.advanceTimersByTime(TIME_CONSTANTS.SECOND_IN_MS);
-      await Promise.resolve(requests[0]);
-      await Promise.resolve(requests[1]);
+      // 2. 요청 Mock 함수
+      const mockRequest = jest.fn((param: string | number) => {
+        console.log(param + " is resolving ");
+        return Promise.resolve("Response for " + param);
+      });
 
-      expect(mockRequest).toHaveBeenCalledTimes(2);
+      // 3. 요청 추가
+      const req1 = limiter.addRequest(() => mockRequest("fn 1")); // 첫 번째 요청
+      const req2 = limiter.addRequest(() => mockRequest("fn 2")); // 두 번째 요청
+      const req3 = limiter.addRequest(() => mockRequest("fn 2")); // 세 번째 요청
 
-      // Process remaining request
-      jest.advanceTimersByTime(TIME_CONSTANTS.SECOND_IN_MS);
-      await Promise.resolve(requests[2]);
+      // 4. 첫 번째 타이머 주기
+      jest.advanceTimersByTime(1000); // 1초 경과
+      await Promise.all([req1, req2]); // 첫 번째와 두 번째 요청이 처리되어야 함
+      expect(mockRequest).toHaveBeenCalledTimes(2); // 두 요청 처리 확인
 
-      expect(mockRequest).toHaveBeenCalledTimes(3);
-      console.log("test end//////////////");
+      // 5. 두 번째 타이머 주기
+      jest.advanceTimersByTime(1000); // 또 1초 경과
+      await req3; // 세 번째 요청이 처리되어야 함
+      expect(mockRequest).toHaveBeenCalledTimes(3); // 총 3개의 요청 처리 확인
+      console.log("test end==========");
     });
 
     it("should handle failed requests properly", async () => {

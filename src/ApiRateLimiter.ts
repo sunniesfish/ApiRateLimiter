@@ -79,8 +79,8 @@ class ApiRateLimiter<T> {
   private async processQueueHelper(now: number) {
     this.updateRequestHistory(now);
     const availableRequests = this.calculateAvailableRequests();
-
-    for (let i = 0; i < availableRequests && this.queue.length > 0; i++) {
+    const queuelength = this.queue.length;
+    for (let i = 0; i < availableRequests && queuelength > 0; i++) {
       console.log("resolving", i + 1);
       const [request, resolve, reject] = this.queue.shift()!;
       await this.processRequest(request, resolve, reject, now);
@@ -98,6 +98,7 @@ class ApiRateLimiter<T> {
       this.errorHandler(error);
     } finally {
       this.isProcessing = false;
+      console.log("after process finally length is", this.queue.length);
       if (this.queue.isEmpty()) this.stopTimer();
     }
   }
