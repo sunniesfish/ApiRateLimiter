@@ -16,8 +16,6 @@ https://www.npmjs.com/package/@sunniesfish/api-rate-limiter
 
 ```bash
 npm install api-rate-limiter
-# or
-yarn add api-rate-limiter
 ```
 
 ## Quick Start
