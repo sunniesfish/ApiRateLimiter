@@ -1,0 +1,11 @@
+src/
+tests/
+coverage/
+node_modules/
+jest.config.js
+tsconfig.json
+package-lock.json
+.eslintrc.json
+.gitignore
+.npmignore
+
