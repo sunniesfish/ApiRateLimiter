@@ -21,7 +21,7 @@ npm install api-rate-limiter
 ## Quick Start
 
 ```typescript
-import ApiRateLimiter from "api-rate-limiter";
+import ApiRateLimiter from "@sunnniesfish/api-rate-limiter";
 
 // Create a rate limiter instance
 const rateLimiter = new ApiRateLimiter<string>({
