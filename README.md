@@ -1,6 +1,7 @@
 # API Rate Limiter
 
 A robust and flexible TypeScript rate limiter for managing API request rates with per-second and per-minute constraints.
+https://www.npmjs.com/package/@sunniesfish/api-rate-limiter
 
 ## Features
 
