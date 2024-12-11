@@ -1,5 +1,5 @@
 {
-  "name": "api-rate-limiter",
+  "name": "@sunniesfish/api-rate-limiter",
   "version": "1.0.0",
   "description": "API rate limiter with configurable time windows",
   "main": "dist/api-rate-limiter.js",
