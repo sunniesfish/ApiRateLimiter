@@ -1,6 +1,7 @@
 # API Rate Limiter
 
 A robust and flexible TypeScript rate limiter for managing API request rates with per-second and per-minute constraints.
+https://www.npmjs.com/package/@sunniesfish/api-rate-limiter
 
 ## Features
 
@@ -15,14 +16,12 @@ A robust and flexible TypeScript rate limiter for managing API request rates wit
 
 ```bash
 npm install api-rate-limiter
-# or
-yarn add api-rate-limiter
 ```
 
 ## Quick Start
 
 ```typescript
-import ApiRateLimiter from "api-rate-limiter";
+import ApiRateLimiter from "@sunnniesfish/api-rate-limiter";
 
 // Create a rate limiter instance
 const rateLimiter = new ApiRateLimiter<string>({
