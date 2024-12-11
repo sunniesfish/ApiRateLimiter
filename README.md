@@ -99,14 +99,9 @@ The library includes three custom error types:
 
 - `InvalidOptionsError`: Thrown when invalid configuration options are provided
 - `QueueFullError`: Thrown when the request queue reaches its maximum capacity
-- `InsufficientRequestsError`: Thrown when there are not enough available requests
 
 ```typescript
-import {
-  InvalidOptionsError,
-  QueueFullError,
-  InsufficientRequestsError,
-} from "api-rate-limiter";
+import { InvalidOptionsError, QueueFullError } from "api-rate-limiter";
 
 try {
   await rateLimiter.addRequest(apiCall);

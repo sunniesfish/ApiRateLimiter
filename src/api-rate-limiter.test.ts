@@ -1,9 +1,5 @@
 import ApiRateLimiter from "./api-rate-limiter";
-import {
-  QueueFullError,
-  InvalidOptionsError,
-  InsufficientRequestsError,
-} from "./errors";
+import { QueueFullError, InvalidOptionsError } from "./errors";
 
 /**
  * Test suite for ApiRateLimiter class

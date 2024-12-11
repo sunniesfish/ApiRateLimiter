@@ -25,15 +25,4 @@ class QueueFullError extends Error {
   }
 }
 
-/**
- * Error thrown when there are not enough available requests
- * @extends Error
- */
-class InsufficientRequestsError extends Error {
-  constructor() {
-    super("Insufficient available requests");
-    this.name = "InsufficientRequestsError";
-  }
-}
-
-export { InvalidOptionsError, QueueFullError, InsufficientRequestsError };
+export { InvalidOptionsError, QueueFullError };

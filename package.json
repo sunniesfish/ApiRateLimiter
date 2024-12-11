@@ -2,10 +2,12 @@
   "name": "api-rate-limiter",
   "version": "1.0.0",
   "description": "API rate limiter with configurable time windows",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/api-rate-limiter.js",
+  "types": "dist/api-rate-limiter.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc",
@@ -24,10 +26,17 @@
     "type": "git",
     "url": "https://github.com/sunniesfish/ApiRateLimiter"
   },
+  "bugs": {
+    "url": "https://github.com/sunniesfish/ApiRateLimiter/issues"
+  },
+  "homepage": "https://github.com/sunniesfish/ApiRateLimiter#readme",
   "devDependencies": {
     "@types/double-ended-queue": "^2.1.7",
     "@types/jest": "^29.5.14",
-    "ts-jest": "^29.2.5"
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.0.0",
+    "eslint": "^8.0.0",
+    "jest": "^29.0.0"
   },
   "dependencies": {
     "double-ended-queue": "^2.1.0-0"
