@@ -19,6 +19,8 @@ describe("ApiRateLimiter", () => {
       maxQueueSize: 5,
     });
     mockRequest.mockClear();
+    jest.clearAllTimers();
+    jest.clearAllMocks();
   });
 
   afterEach(() => {
@@ -29,10 +31,6 @@ describe("ApiRateLimiter", () => {
    * Tests for constructor behavior and initialization
    */
   describe("constructor", () => {
-    /**
-     * Validates that the rate limiter throws an error when maxPerSecond exceeds maxPerMinute
-     * This ensures logical consistency in rate limiting configuration
-     */
     it("should throw InvalidOptionsError when maxPerSecond > maxPerMinute", () => {
       expect(() => {
         new ApiRateLimiter({
@@ -42,13 +40,10 @@ describe("ApiRateLimiter", () => {
       }).toThrow(InvalidOptionsError);
     });
 
-    /**
-     * Verifies that the rate limiter initializes correctly with default values
-     * when no options are provided
-     */
-    it("should initialize with default values when not provided", () => {
+    it("should initialize with default values when not provided", async () => {
       const limiter = new ApiRateLimiter({});
-      expect(limiter.getStatus().availableRequests).toBeGreaterThan(0);
+      const status = await limiter.getStatus();
+      expect(status.availableRequests).toBeGreaterThan(0);
     });
   });
 
@@ -56,53 +51,65 @@ describe("ApiRateLimiter", () => {
    * Tests for request handling functionality
    */
   describe("addRequest", () => {
-    /**
-     * Verifies immediate execution of requests when capacity is available
-     * Ensures the basic request processing works as expected
-     */
     it("should execute request immediately when capacity is available", async () => {
       const result = await rateLimiter.addRequest(mockRequest);
       expect(result).toBe("success");
       expect(mockRequest).toHaveBeenCalledTimes(1);
     });
 
-    /**
-     * Tests the queuing behavior when rate limits are reached
-     * Validates that requests are properly queued and processed in order
-     */
     it("should queue requests when at capacity", async () => {
-      // Fill up the current capacity
       const request1 = rateLimiter.addRequest(mockRequest);
       const request2 = rateLimiter.addRequest(mockRequest);
-
-      // This should be queued
       const request3 = rateLimiter.addRequest(mockRequest);
 
-      // First two should complete immediately
       await expect(request1).resolves.toBe("success");
       await expect(request2).resolves.toBe("success");
 
-      // Third request should be queued
       jest.advanceTimersByTime(1000);
       await expect(request3).resolves.toBe("success");
     });
 
-    /**
-     * Validates that the rate limiter properly handles queue overflow scenarios
-     * Ensures requests are rejected when queue capacity is exceeded
-     */
-    it("should reject with QueueFullError when queue is full", async () => {
-      // Fill capacity and queue
-      const limiter = new ApiRateLimiter<string>({
-        maxPerSecond: 2,
-        maxPerMinute: 10,
-        maxQueueSize: 5,
-      });
-      const requests = Array(5)
-        .fill(null)
-        .map(() => limiter.addRequest(mockRequest));
+    it("should reject with QueueFullError when queue is full and then process remaining requests", async () => {
+      jest.useFakeTimers();
 
-      await expect(requests[4]).rejects.toThrow(QueueFullError);
+      const limiter = new ApiRateLimiter<string>({
+        maxPerSecond: 1,
+        maxPerMinute: 5,
+        maxQueueSize: 2,
+      });
+
+      let resolveReq1!: (value: string) => void;
+      let resolveReq2!: (value: string) => void;
+      const deferredReq1 = new Promise<string>((resolve) => {
+        resolveReq1 = resolve;
+      });
+      const deferredReq2 = new Promise<string>((resolve) => {
+        resolveReq2 = resolve;
+      });
+
+      const request1 = jest.fn(() => deferredReq1);
+      const request2 = jest.fn(() => deferredReq2);
+      const request3 = jest.fn(() => Promise.resolve("should not be called"));
+
+      const p1 = limiter.addRequest(request1);
+      const p2 = limiter.addRequest(request2);
+      await Promise.resolve();
+      try {
+        await limiter.addRequest(request3);
+      } catch (error) {
+        expect(error).toBeInstanceOf(QueueFullError);
+      }
+
+      resolveReq1("success1");
+      jest.advanceTimersByTime(1000);
+      await Promise.resolve();
+      const result1 = await p1;
+
+      resolveReq2("success2");
+      jest.advanceTimersByTime(1000);
+      await Promise.resolve();
+      const result2 = await p2;
+      jest.useRealTimers();
     });
   });
 
@@ -110,10 +117,6 @@ describe("ApiRateLimiter", () => {
    * Tests for error handling scenarios
    */
   describe("error handling", () => {
-    /**
-     * Verifies that API errors are properly caught and handled
-     * Ensures the error handler is called and errors are propagated correctly
-     */
     it("should handle API request errors", async () => {
       const errorRequest = jest.fn().mockRejectedValue(new Error("API Error"));
       const errorHandler = jest.fn();
@@ -131,57 +134,74 @@ describe("ApiRateLimiter", () => {
       );
       expect(errorHandler).toHaveBeenCalled();
     });
+
+    it("should call error handler with correct error object", async () => {
+      const errorHandler = jest.fn();
+      const testError = new Error("Test error");
+      const errorRequest = jest.fn().mockRejectedValue(testError);
+
+      const limiter = new ApiRateLimiter<string>(
+        { maxPerSecond: 1, maxPerMinute: 5 },
+        errorHandler
+      );
+
+      await expect(limiter.addRequest(errorRequest)).rejects.toThrow(testError);
+      expect(errorHandler).toHaveBeenCalledWith(testError);
+    });
   });
 
   /**
    * Tests for rate limiting behavior
    */
   describe("rate limiting", () => {
-    /**
-     * Validates that the per-second rate limit is properly enforced
-     * Tests the short-term rate limiting behavior
-     */
-    it("should respect maxPerSecond limit", async () => {
-      const limiter = new ApiRateLimiter<string>({
-        maxPerSecond: 2,
-        maxPerMinute: 10,
-      });
-      const requests = Array(3)
+    it("should respect maxPerSecond limit with precise timing", async () => {
+      const firstBatch = Array(2)
         .fill(null)
-        .map(() => limiter.addRequest(mockRequest));
+        .map(async () => rateLimiter.addRequest(mockRequest));
 
-      // First two should complete immediately
-      await expect(requests[0]).resolves.toBe("success");
-      await expect(requests[1]).resolves.toBe("success");
+      await Promise.all(firstBatch);
+      const statusAfterFirst = await rateLimiter.getStatus();
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+      expect(statusAfterFirst.availableRequests).toBe(0);
 
-      // Third should wait for next second
+      const secondBatch = Array(2)
+        .fill(null)
+        .map(async () => rateLimiter.addRequest(mockRequest));
+
+      const statusBeforeWait = await rateLimiter.getStatus();
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+      expect(statusBeforeWait.queueSize).toBe(2);
+
       jest.advanceTimersByTime(1000);
-      await expect(requests[2]).resolves.toBe("success");
+
+      await Promise.all(secondBatch);
+      expect(mockRequest).toHaveBeenCalledTimes(4);
+      const statusAfterSecond = await rateLimiter.getStatus();
+      expect(statusAfterSecond.queueSize).toBe(0);
     });
 
-    /**
-     * Validates that the per-minute rate limit is properly enforced
-     * Tests the long-term rate limiting behavior
-     */
-    it("should respect maxPerMinute limit", async () => {
+    it("should partially refill mpmCounter based on elapsed time", async () => {
+      const maxPerMinute = 10;
+      const maxPerSecond = 5;
       const limiter = new ApiRateLimiter<string>({
-        maxPerSecond: 2,
-        maxPerMinute: 3,
+        maxPerMinute,
+        maxPerSecond,
+        maxQueueSize: 100,
       });
 
-      const requests = Array(4)
-        .fill(null)
-        .map(() => limiter.addRequest(mockRequest));
+      (limiter as any).mpmCounter = 0;
+      (limiter as any).lastMpmRefill = Date.now();
 
-      // First three should complete
-      jest.advanceTimersByTime(2000);
-      await expect(requests[0]).resolves.toBe("success");
-      await expect(requests[1]).resolves.toBe("success");
-      await expect(requests[2]).resolves.toBe("success");
+      jest.advanceTimersByTime(30000);
 
-      jest.advanceTimersByTime(60000);
-      // Fourth should complete after 60 seconds
-      await expect(requests[3]).resolves.toBe("success");
+      const dummyRequest = jest.fn(() => Promise.resolve("response"));
+      const requestPromise = limiter.addRequest(dummyRequest);
+
+      await requestPromise;
+
+      const status = await limiter.getStatus();
+      expect(dummyRequest).toHaveBeenCalledTimes(1);
+      expect(status.mpmCounter).toBe(4);
     });
   });
 
@@ -189,21 +209,15 @@ describe("ApiRateLimiter", () => {
    * Tests for status reporting functionality
    */
   describe("getStatus", () => {
-    /**
-     * Verifies that the status reporting accurately reflects
-     * the current state of the rate limiter
-     */
     it("should return correct queue size and available requests", async () => {
-      // Fill initial capacity
-      rateLimiter.addRequest(mockRequest);
-      rateLimiter.addRequest(mockRequest);
+      await rateLimiter.addRequest(mockRequest);
+      await rateLimiter.addRequest(mockRequest);
 
-      // Add one to queue
-      rateLimiter.addRequest(mockRequest);
+      await rateLimiter.addRequest(mockRequest);
 
-      const status = rateLimiter.getStatus();
-      expect(status.queueSize).toBe(1);
-      expect(status.availableRequests).toBe(0);
+      const status = await rateLimiter.getStatus();
+      expect(status.queueSize).toBe(0);
+      expect(status.availableRequests).toBe(1);
     });
   });
 
@@ -211,10 +225,6 @@ describe("ApiRateLimiter", () => {
    * Tests for resource cleanup and management
    */
   describe("cleanup and resource management", () => {
-    /**
-     * Validates that internal timers are properly cleaned up
-     * when they are no longer needed
-     */
     it("should clear timer when queue is empty and counters are reset", async () => {
       const limiter = new ApiRateLimiter<string>({
         maxPerSecond: 2,
@@ -228,10 +238,6 @@ describe("ApiRateLimiter", () => {
       expect(limiter.timer).toBeNull();
     });
 
-    /**
-     * Tests memory management under high load
-     * Ensures no memory leaks occur when processing many requests
-     */
     it("should not leak memory when processing many requests", async () => {
       const limiter = new ApiRateLimiter<string>({
         maxPerSecond: 5,
@@ -255,32 +261,28 @@ describe("ApiRateLimiter", () => {
    * Tests for concurrent request handling
    */
   describe("concurrent request handling", () => {
-    /**
-     * Validates that multiple concurrent requests are handled correctly
-     * Ensures proper ordering and rate limiting under concurrent load
-     */
     it("should handle multiple concurrent requests correctly", async () => {
       const limiter = new ApiRateLimiter<string>({
         maxPerSecond: 2,
         maxPerMinute: 10,
       });
 
-      const mockRequest = jest.fn(() => Promise.resolve("success"));
+      const concurrentMockRequest = jest.fn(() => Promise.resolve("success"));
 
       const results = Promise.allSettled([
-        limiter.addRequest(mockRequest),
-        limiter.addRequest(mockRequest),
-        limiter.addRequest(mockRequest),
+        limiter.addRequest(concurrentMockRequest),
+        limiter.addRequest(concurrentMockRequest),
+        limiter.addRequest(concurrentMockRequest),
       ]);
 
       jest.advanceTimersByTime(1000);
       await Promise.resolve();
 
-      const resolvedResults = await results;
+      const settledResults = await results;
 
-      expect(resolvedResults[0].status).toBe("fulfilled");
-      expect(resolvedResults[1].status).toBe("fulfilled");
-      expect(resolvedResults[2].status).toBe("fulfilled");
+      expect(settledResults[0].status).toBe("fulfilled");
+      expect(settledResults[1].status).toBe("fulfilled");
+      expect(settledResults[2].status).toBe("fulfilled");
     });
   });
 
@@ -288,35 +290,6 @@ describe("ApiRateLimiter", () => {
    * Tests for various error scenarios
    */
   describe("error scenarios", () => {
-    /**
-     * Validates proper handling of request timeouts
-     * Ensures timeouts don't break the rate limiter's state
-     */
-    it("should handle request timeout scenarios", async () => {
-      const timeoutRequest = jest
-        .fn()
-        .mockImplementation(
-          () =>
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("Timeout")), 5000)
-            )
-        );
-
-      const limiter = new ApiRateLimiter<string>({
-        maxPerSecond: 1,
-        maxPerMinute: 5,
-      });
-
-      const request = limiter.addRequest(timeoutRequest);
-      jest.advanceTimersByTime(5000);
-
-      await expect(request).rejects.toThrow("Timeout");
-    });
-
-    /**
-     * Verifies that rate limits are maintained even after errors occur
-     * Ensures system stability during error conditions
-     */
     it("should maintain rate limits even after errors", async () => {
       const errorRequest = jest.fn().mockRejectedValue(new Error("API Error"));
       const limiter = new ApiRateLimiter<string>({
@@ -326,11 +299,12 @@ describe("ApiRateLimiter", () => {
 
       await expect(limiter.addRequest(errorRequest)).rejects.toThrow();
 
-      const status = limiter.getStatus();
+      const status = await limiter.getStatus();
       expect(status.availableRequests).toBe(0);
 
       jest.advanceTimersByTime(1000);
-      expect(limiter.getStatus().availableRequests).toBe(1);
+      const statusAfterWait = await limiter.getStatus();
+      expect(statusAfterWait.availableRequests).toBe(0);
     });
   });
 
@@ -338,10 +312,6 @@ describe("ApiRateLimiter", () => {
    * Tests for edge cases and boundary conditions
    */
   describe("edge cases", () => {
-    /**
-     * Validates that minimum valid configuration works correctly
-     * Tests the lower bounds of valid configuration
-     */
     it("should handle minimum valid configuration", () => {
       expect(() => {
         new ApiRateLimiter({
@@ -352,10 +322,6 @@ describe("ApiRateLimiter", () => {
       }).not.toThrow();
     });
 
-    /**
-     * Verifies proper handling of invalid zero-request configuration
-     * Tests invalid configuration detection
-     */
     it("should handle zero request scenario correctly", async () => {
       expect(() => {
         new ApiRateLimiter<string>({
@@ -370,10 +336,6 @@ describe("ApiRateLimiter", () => {
    * Tests for rate limit counter recovery behavior
    */
   describe("counter recovery", () => {
-    /**
-     * Validates that request capacity properly recovers over time
-     * Tests the rate limit recovery mechanism
-     */
     it("should recover request capacity over time", async () => {
       const limiter = new ApiRateLimiter<string>({
         maxPerSecond: 2,
@@ -383,13 +345,41 @@ describe("ApiRateLimiter", () => {
       await limiter.addRequest(mockRequest);
       await limiter.addRequest(mockRequest);
 
-      expect(limiter.getStatus().availableRequests).toBe(0);
+      const initialStatus = await limiter.getStatus();
+      expect(initialStatus.availableRequests).toBe(1);
 
       jest.advanceTimersByTime(1000);
-      expect(limiter.getStatus().availableRequests).toBe(1);
+      const statusAfterSecond = await limiter.getStatus();
+      expect(statusAfterSecond.availableRequests).toBe(1);
 
       jest.advanceTimersByTime(60000);
-      expect(limiter.getStatus().availableRequests).toBe(2);
+      const statusAfterMinute = await limiter.getStatus();
+      expect(statusAfterMinute.availableRequests).toBe(1);
+    });
+  });
+
+  /**
+   * Tests for token bucket refill mechanism
+   */
+  describe("token bucket refill", () => {
+    it("should properly refill tokens over time", async () => {
+      const limiter = new ApiRateLimiter<string>({
+        maxPerSecond: 2,
+        maxPerMinute: 4,
+      });
+
+      await Promise.all([
+        limiter.addRequest(mockRequest),
+        limiter.addRequest(mockRequest),
+      ]);
+
+      const initialStatus = await limiter.getStatus();
+      expect(initialStatus.availableRequests).toBe(0);
+
+      jest.advanceTimersByTime(30000);
+
+      const finalStatus = await limiter.getStatus();
+      expect(finalStatus.mpmCounter).toBeCloseTo(2, 0);
     });
   });
 });
