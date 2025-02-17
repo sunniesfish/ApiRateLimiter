@@ -24,8 +24,6 @@ export interface ApiRateLimiterOptions {
   maxPerMinute?: number;
   /** Maximum size of the request queue */
   maxQueueSize?: number;
-  /** Interval for processing queued requests in milliseconds */
-  processInterval?: number;
 }
 
 /**
