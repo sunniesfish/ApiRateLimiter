@@ -14,15 +14,4 @@ class InvalidOptionsError extends Error {
   }
 }
 
-/**
- * Error thrown when the request queue reaches its maximum capacity
- * @extends Error
- */
-class QueueFullError extends Error {
-  constructor() {
-    super("Rate limiter queue is full");
-    this.name = "QueueFullError";
-  }
-}
-
-export { InvalidOptionsError, QueueFullError };
+export { InvalidOptionsError };
