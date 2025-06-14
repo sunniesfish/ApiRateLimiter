@@ -4,25 +4,29 @@
  */
 
 /**
- * Error thrown when invalid configuration options are provided
+ * Error thrown when invalid configuration options are provided to the ApiRateLimiter constructor.
+ *
+ * This error is thrown in the following cases:
+ * - maxPerSecond is greater than maxPerMinute
+ * - maxPerSecond is less than or equal to 0
+ * - maxPerMinute is less than or equal to 0
+ *
  * @extends Error
+ * @example
+ * ```typescript
+ * // This will throw InvalidOptionsError
+ * new ApiRateLimiter({ maxPerSecond: 100, maxPerMinute: 50 });
+ * ```
  */
 class InvalidOptionsError extends Error {
+  /**
+   * Creates an instance of InvalidOptionsError.
+   * Sets the error message and name property.
+   */
   constructor() {
     super("Invalid options provided to the rate limiter");
     this.name = "InvalidOptionsError";
   }
 }
 
-/**
- * Error thrown when the request queue reaches its maximum capacity
- * @extends Error
- */
-class QueueFullError extends Error {
-  constructor() {
-    super("Rate limiter queue is full");
-    this.name = "QueueFullError";
-  }
-}
-
-export { InvalidOptionsError, QueueFullError };
+export { InvalidOptionsError };

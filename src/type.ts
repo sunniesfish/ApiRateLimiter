@@ -6,7 +6,12 @@
 /** Function type for API requests that return a promise */
 export type ApiRequest<T> = () => Promise<T>;
 
-/** Tuple type representing a queued request with its resolve and reject handlers */
+/**
+ * Tuple type representing a queued request with its resolve and reject handlers
+ * - [0]: The API request function to execute
+ * - [1]: Promise resolve handler for successful execution
+ * - [2]: Promise reject handler for failed execution
+ */
 export type QueueItem<T> = [
   ApiRequest<T>,
   (value: T) => void,
@@ -22,8 +27,6 @@ export interface ApiRateLimiterOptions {
   maxPerSecond?: number;
   /** Maximum number of requests allowed per minute */
   maxPerMinute?: number;
-  /** Maximum size of the request queue */
-  maxQueueSize?: number;
 }
 
 /**
@@ -40,8 +43,3 @@ export interface RateLimiterStatus {
   /** Current count of requests per minute */
   mpmCounter: number;
 }
-
-/** Promise resolve function type */
-export type ResolveFunction<T> = (value: T | PromiseLike<T>) => void;
-/** Promise reject function type */
-export type RejectFunction = (reason?: any) => void;
