@@ -11,38 +11,61 @@ import AsyncLock from "./async-lock";
 
 /**
  * A rate limiter for API requests that limits the number of requests per second and per minute.
- * It uses a token bucket algorithm with separate counters for per-second and per-minute limits.
+ * Implements a token bucket algorithm with separate counters for per-second and per-minute limits.
+ * Thread-safe: uses an internal async lock to prevent race conditions.
+ * Supports batching of incoming requests for efficient queue management.
  */
 class ApiRateLimiter<T> {
+  /** Timer for scheduling the next tick (null if not running) */
   private timer: NodeJS.Timeout | null = null;
+  /** Queue of pending API requests to be processed */
   private queue: Deque<QueueItem<T>> = new Deque<QueueItem<T>>();
+  /** Remaining tokens for per-second limit */
   private mpsCounter: number;
+  /** Remaining tokens for per-minute limit */
   private mpmCounter: number;
+  /** Maximum allowed requests per second */
   private maxPerSecond: number;
+  /** Maximum allowed requests per minute */
   private maxPerMinute: number;
+  /** Timestamp of the last per-minute token refill */
   private lastMpmRefill: number = Date.now();
+  /** Reference to constants used throughout the class */
   private static readonly Constants = CONSTANTS;
+  /** Async lock to ensure thread-safe token and queue operations */
   private tokenLock = new AsyncLock();
+  /** Indicates if the timer is currently running */
   private isTimerRunning: boolean = false;
 
+  /**
+   * Pending requests waiting to be batched and pushed to the main queue.
+   * Each item contains the request function and its resolve/reject handlers.
+   */
   private pendingRequest: Array<{
     request: ApiRequest<T>;
     resolve: (value: T) => void;
     reject: (reason?: any) => void;
   }> = [];
+  /** Indicates if a batch is currently being processed */
   private isBatching: boolean = false;
-  private batchStats = {
-    totalBatches: 0,
-    totalRequests: 0,
-    averageBatchSize: 0,
-    maxBatchSize: 0,
-  };
+
+  /**
+   * Current status snapshot of the rate limiter
+   * Updated after each tick or batch processing.
+   * {
+   *   queueSize: number;
+   *   availableRequests: number;
+   *   mpsCounter: number;
+   *   mpmCounter: number;
+   * }
+   */
+  private status!: RateLimiterStatus;
 
   /**
    * Creates an instance of ApiRateLimiter.
    * @param {ApiRateLimiterOptions} options - Configuration options for the rate limiter.
-   *   - `maxPerSecond`: Maximum number of API requests allowed per second.
-   *   - `maxPerMinute`: Maximum number of API requests allowed per minute.
+   *   - `maxPerSecond`: Maximum number of API requests allowed per second (default: see constants).
+   *   - `maxPerMinute`: Maximum number of API requests allowed per minute (default: see constants).
    *
    * @throws {InvalidOptionsError} If options are invalid (e.g., maxPerSecond > maxPerMinute or non-positive values).
    */
@@ -65,6 +88,13 @@ class ApiRateLimiter<T> {
 
     this.mpsCounter = maxPerSecond;
     this.mpmCounter = maxPerMinute;
+
+    this.status = {
+      queueSize: this.queue.length,
+      availableRequests: this.calculateAvailableRequests(),
+      mpsCounter: this.mpsCounter,
+      mpmCounter: Math.floor(this.mpmCounter),
+    };
   }
 
   /**
@@ -72,7 +102,7 @@ class ApiRateLimiter<T> {
    * The request will be executed when tokens are available based on the current rate limits.
    *
    * @param {ApiRequest<T>} request - The API request function to be executed. It must return a Promise.
-   * @returns {Promise<T>} A promise that resolves with the API response or rejects if the queue is full or the request fails.
+   * @returns {Promise<T>} A promise that resolves with the API response or rejects if the request fails.
    */
   public async addRequest(request: ApiRequest<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -81,6 +111,10 @@ class ApiRateLimiter<T> {
     });
   }
 
+  /**
+   * Schedules batch processing of pending requests if not already batching.
+   * Uses setImmediate to defer batch processing to the next event loop tick.
+   */
   private scheduleBatchProcessing(): void {
     if (!this.isBatching) {
       this.isBatching = true;
@@ -95,6 +129,11 @@ class ApiRateLimiter<T> {
     }
   }
 
+  /**
+   * Processes all pending requests as a batch, pushing them to the main queue.
+   * Acquires a lock to ensure thread safety.
+   * Updates batch statistics and starts the timer if needed.
+   */
   private async processBatch(): Promise<void> {
     if (this.pendingRequest.length === 0) {
       return;
@@ -102,8 +141,6 @@ class ApiRateLimiter<T> {
     const release = await this.tokenLock.acquire();
     try {
       const batch = this.pendingRequest.splice(0);
-
-      this.updateBatchStats(batch.length);
 
       for (const item of batch) {
         this.queue.push([item.request, item.resolve, item.reject]);
@@ -116,19 +153,9 @@ class ApiRateLimiter<T> {
     }
   }
 
-  private updateBatchStats(batchSize: number): void {
-    this.batchStats.totalBatches++;
-    this.batchStats.totalRequests += batchSize;
-    this.batchStats.maxBatchSize = Math.max(
-      this.batchStats.maxBatchSize,
-      batchSize
-    );
-    this.batchStats.averageBatchSize =
-      this.batchStats.totalRequests / this.batchStats.totalBatches;
-  }
-
   /**
    * Ensures that the request processing loop starts by calling `timerTick` if it is not already running.
+   * Prevents duplicate timer invocations.
    */
   private startTimer(): void {
     if (!this.timer && !this.isTimerRunning) {
@@ -144,6 +171,8 @@ class ApiRateLimiter<T> {
    * This method applies a token bucket algorithm:
    *  - Resets `mpsCounter` every tick (per-second limit).
    *  - Refills `mpmCounter` gradually based on the elapsed time.
+   *  - Acquires a lock to ensure thread safety.
+   *  - If the queue is empty after processing, stops the timer.
    * It processes up to min(`mpsCounter`, floor(`mpmCounter`)) requests per tick.
    */
   private async timerTick(): Promise<void> {
@@ -160,6 +189,8 @@ class ApiRateLimiter<T> {
         this.processRequest(request, resolve, reject);
         processed++;
       }
+
+      this.updateStatus();
 
       if (!this.queue.isEmpty()) {
         this.timer = setTimeout(
@@ -185,10 +216,11 @@ class ApiRateLimiter<T> {
   /**
    * Processes a single API request.
    * Decrements the available tokens (`mpsCounter` and `mpmCounter`) before executing the API request.
+   * The request's success or failure does not affect token recovery.
    *
    * @param {ApiRequest<T>} request - The API request function that returns a Promise.
-   * @param {(value: T) => void} resolve
-   * @param {(reason?: any) => void} reject
+   * @param {(value: T) => void} resolve - Promise resolver for the request.
+   * @param {(reason?: any) => void} reject - Promise rejector for the request.
    */
   private async processRequest(
     request: ApiRequest<T>,
@@ -229,7 +261,7 @@ class ApiRateLimiter<T> {
   }
 
   /**
-   * Returns the current status of the rate limiter.
+   * Returns a shallow copy of the current status of the rate limiter.
    *
    * @returns {RateLimiterStatus} The current status including:
    *  - `queueSize`: Number of pending requests in the queue.
@@ -237,19 +269,19 @@ class ApiRateLimiter<T> {
    *  - `mpsCounter`: Remaining tokens for the per-second limit.
    *  - `mpmCounter`: Remaining tokens for the per-minute limit (floored).
    */
-  public async getStatus(): Promise<RateLimiterStatus> {
-    const release = await this.tokenLock.acquire();
-    try {
-      const status = {
-        queueSize: this.queue.length,
-        availableRequests: this.calculateAvailableRequests(),
-        mpsCounter: this.mpsCounter,
-        mpmCounter: Math.floor(this.mpmCounter),
-      };
-      return status;
-    } finally {
-      release();
-    }
+  public getStatus(): RateLimiterStatus {
+    return { ...this.status };
+  }
+
+  /**
+   * Updates the internal status snapshot after each tick or batch processing.
+   * Not exposed publicly.
+   */
+  private updateStatus(): void {
+    this.status.queueSize = this.queue.length;
+    this.status.availableRequests = this.calculateAvailableRequests();
+    this.status.mpsCounter = this.mpsCounter;
+    this.status.mpmCounter = Math.floor(this.mpmCounter);
   }
 }
 

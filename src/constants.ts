@@ -3,15 +3,17 @@
  * Defines default values and time conversion constants
  */
 
+/**
+ * Collection of constants used by the API Rate Limiter
+ * @readonly
+ */
 export const CONSTANTS = {
-  /** Milliseconds in a second */
+  /** Milliseconds in one second (1000ms) */
   SECOND_IN_MS: 1000,
-  /** Milliseconds in a minute */
+  /** Milliseconds in one minute (60,000ms) */
   MINUTE_IN_MS: 60000,
-  /** Default maximum requests per second */
+  /** Default maximum requests allowed per second (conservative default) */
   DEFAULT_MAX_PER_SECOND: 100,
-  /** Default maximum requests per minute */
+  /** Default maximum requests allowed per minute (should be >= DEFAULT_MAX_PER_SECOND) */
   DEFAULT_MAX_PER_MINUTE: 1000,
-  /** Default maximum size of the request queue */
-  DEFAULT_MAX_QUEUE_SIZE: 10000,
 } as const;
